@@ -67,6 +67,7 @@ export function renderDailyBrief(input: {
   riskNarration: string;
   riskFlags: RiskFlag[];
   webViewUrl?: string;
+  feedbackUrls?: { up: string; down: string };
 }): { fullHtml: string; portfolioSectionHtml: string } {
   const portfolioSectionHtml = [
     sectionHeading("Your book"),
@@ -80,10 +81,17 @@ export function renderDailyBrief(input: {
     ? `<p style="font-size:13px;margin:20px 0 0;"><a href="${escapeHtml(input.webViewUrl)}" style="color:#8a6d3b;">View brief history &rarr;</a></p>`
     : "";
 
+  const feedbackRow = input.feedbackUrls
+    ? `<p style="font-size:13px;margin:16px 0 0;color:#6b6b6b;">Was this brief useful?
+        <a href="${escapeHtml(input.feedbackUrls.up)}" style="color:#8a6d3b;text-decoration:none;margin-left:6px;">&#128077; Yes</a>
+        <a href="${escapeHtml(input.feedbackUrls.down)}" style="color:#8a6d3b;text-decoration:none;margin-left:10px;">&#128078; No</a></p>`
+    : "";
+
   const body = [
     sectionHeading("Markets overnight"),
     input.marketSummaryHtml,
     portfolioSectionHtml,
+    feedbackRow,
     webViewLink,
   ].join("\n");
 
@@ -113,6 +121,11 @@ export function renderWeeklyJournal(input: {
         ].join("\n");
 
   return shell("Weekly Journal", input.weekLabel, sectionHeading("Trading patterns") + body);
+}
+
+/** Full-page web view reusing the email shell (brief archive, single brief). */
+export function renderWebPage(title: string, dateLabel: string, bodyHtml: string): string {
+  return shell(title, dateLabel, bodyHtml);
 }
 
 export function renderReauthNudge(loginUrl: string): string {

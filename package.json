@@ -15,6 +15,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "job:daily-brief": "tsx src/jobs/dailyBrief.ts",
     "job:weekly-journal": "tsx src/jobs/weeklyJournal.ts",
+    "job:prices": "tsx src/jobs/ingestPrices.ts",
     "test": "vitest run"
   },
   "dependencies": {

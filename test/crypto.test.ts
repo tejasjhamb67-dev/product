@@ -53,3 +53,23 @@ describe("compliance guard", () => {
     expect(checkCompliance("A target price of 2600 looks likely.").ok).toBe(false);
   });
 });
+
+describe("feedback link signing", () => {
+  it("verifies its own signatures and rejects tampering", async () => {
+    process.env.DATABASE_URL ??= "postgres://x:x@localhost:5432/x";
+    process.env.TOKEN_ENCRYPTION_KEY ??= "a".repeat(64);
+    process.env.SESSION_SIGNING_KEY ??= "s".repeat(64);
+    process.env.ANTHROPIC_API_KEY ??= "test";
+    process.env.KITE_API_KEY ??= "test";
+    process.env.KITE_API_SECRET ??= "test";
+    process.env.RESEND_API_KEY ??= "test";
+    process.env.EMAIL_FROM ??= "test@test.in";
+    const { feedbackSignature, verifyFeedbackSignature } = await import(
+      "../src/delivery/feedback.js"
+    );
+    const sig = feedbackSignature(12, 34, "up");
+    expect(verifyFeedbackSignature(12, 34, "up", sig)).toBe(true);
+    expect(verifyFeedbackSignature(12, 34, "down", sig)).toBe(false); // score swap
+    expect(verifyFeedbackSignature(12, 35, "up", sig)).toBe(false); // user swap
+  });
+});

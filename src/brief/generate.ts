@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import type { Holding } from "../broker/types.js";
 import type { RiskSnapshot, Thresholds } from "../risk/engine.js";
 import { checkCompliance } from "./compliance.js";
+import { recordUsage } from "./usage.js";
 import {
   USER_BRIEF_OUTPUT_SCHEMA,
   USER_BRIEF_SYSTEM,
@@ -29,6 +30,7 @@ export async function generateUserBrief(input: {
   holdings: Holding[];
   risk: RiskSnapshot;
   thresholds: Thresholds;
+  userId?: number;
 }): Promise<UserBriefSections> {
   const message = userBriefMessage({
     holdingsJson: JSON.stringify(
@@ -69,6 +71,8 @@ export async function generateUserBrief(input: {
         },
       ],
     });
+
+    await recordUsage("user_brief", config().BRIEF_MODEL, response.usage, input.userId);
 
     const text = response.content.find(
       (b): b is Extract<typeof b, { type: "text" }> => b.type === "text",

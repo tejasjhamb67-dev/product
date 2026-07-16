@@ -14,6 +14,15 @@ import {
   verifyWebhookSignature,
 } from "../billing/razorpay.js";
 import { runDailyBriefJob } from "../jobs/dailyBrief.js";
+import { verifyFeedbackSignature } from "../delivery/feedback.js";
+import { answerPortfolioQuestion, QaRateLimitError } from "../brief/qa.js";
+import { usageSummary } from "../brief/usage.js";
+import { loadCurrentBook } from "../portfolio/current.js";
+import { computeRiskSnapshot, DEFAULT_THRESHOLDS } from "../risk/engine.js";
+import { loadPriceSeries } from "../risk/prices.js";
+import { PRESET_SCENARIOS, runScenario, type Scenario } from "../risk/scenario.js";
+import { NIFTY_INDEX_TICKER } from "../broker/kiteHistory.js";
+import { renderWebPage, escapeHtml } from "../brief/render.js";
 
 const SESSION_COOKIE = "meridian_session";
 
@@ -206,6 +215,182 @@ export function buildServer(): FastifyInstance {
     },
   );
 
+  // ---- Brief feedback (signed links from email, no login needed) ----
+
+  app.get("/feedback", async (req, reply) => {
+    const query = z
+      .object({
+        brief: z.coerce.number(),
+        user: z.coerce.number(),
+        score: z.enum(["up", "down"]),
+        sig: z.string().min(1),
+      })
+      .safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: "bad feedback link" });
+    const { brief, user, score, sig } = query.data;
+    if (!verifyFeedbackSignature(brief, user, score, sig)) {
+      return reply.code(403).send({ error: "invalid signature" });
+    }
+    await db().query(
+      `INSERT INTO brief_feedback (brief_id, user_id, score)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (brief_id, user_id) DO UPDATE SET score = EXCLUDED.score, created_at = now()`,
+      [brief, user, score],
+    );
+    return reply
+      .type("text/html")
+      .send(
+        renderWebPage(
+          "Feedback",
+          new Date().toDateString(),
+          `<p style="font-size:15px;color:#1a1a1a;">Thanks - your feedback was recorded.</p>`,
+        ),
+      );
+  });
+
+  // ---- Portfolio Q&A (interactive, Core/Pro) ----
+
+  app.post("/ask", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    if (!(await hasTier(uid, ["core", "pro"]))) {
+      return reply.code(402).send({ error: "portfolio Q&A requires an active Core or Pro subscription" });
+    }
+    const body = z.object({ question: z.string().min(3).max(1000) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "expected { question: string }" });
+
+    const book = await loadCurrentBook(uid);
+    if (!book) {
+      return reply.code(409).send({ error: "no portfolio data - connect a broker or upload a CSV first" });
+    }
+
+    const priceSeries = await loadPriceSeries(book.holdings.map((h) => h.ticker));
+    const risk = computeRiskSnapshot(book.holdings, book.margins, priceSeries, DEFAULT_THRESHOLDS);
+    const { rows: ctxRows } = await db().query(
+      `SELECT summary_text FROM market_context ORDER BY run_date DESC LIMIT 1`,
+    );
+
+    try {
+      const answer = await answerPortfolioQuestion({
+        userId: uid,
+        question: body.data.question,
+        holdings: book.holdings,
+        risk,
+        marketContextText: ctxRows[0]?.summary_text ?? null,
+      });
+      return { answer, bookSource: book.source };
+    } catch (err) {
+      if (err instanceof QaRateLimitError) return reply.code(429).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  // ---- Scenario stress-test (Pro) ----
+
+  app.get("/scenarios/presets", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    return { presets: PRESET_SCENARIOS };
+  });
+
+  app.post("/scenarios/run", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    if (!(await hasTier(uid, ["pro"]))) {
+      return reply.code(402).send({ error: "scenario stress-tests require an active Pro subscription" });
+    }
+    const body = z
+      .object({
+        preset: z.string().optional(),
+        shocks: z
+          .object({
+            indexPct: z.number().min(-50).max(50).optional(),
+            sectorPct: z.record(z.number().min(-50).max(50)).optional(),
+            tickerPct: z.record(z.number().min(-90).max(90)).optional(),
+          })
+          .optional(),
+      })
+      .refine((v) => v.preset || v.shocks, { message: "provide a preset name or custom shocks" })
+      .safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: body.error.issues[0]?.message ?? "bad input" });
+
+    let scenario: Scenario;
+    if (body.data.preset) {
+      const found = PRESET_SCENARIOS.find((s) => s.name === body.data.preset);
+      if (!found) return reply.code(404).send({ error: "unknown preset" });
+      scenario = found;
+    } else {
+      scenario = { name: "Custom scenario", shocks: body.data.shocks! };
+    }
+
+    const book = await loadCurrentBook(uid);
+    if (!book) {
+      return reply.code(409).send({ error: "no portfolio data - connect a broker or upload a CSV first" });
+    }
+
+    const tickers = book.holdings.map((h) => h.ticker);
+    const priceSeries = await loadPriceSeries([...tickers, NIFTY_INDEX_TICKER]);
+    const indexCloses = priceSeries.get(NIFTY_INDEX_TICKER) ?? [];
+
+    const result = runScenario(book.holdings, scenario, priceSeries, indexCloses);
+    return { ...result, bookSource: book.source };
+  });
+
+  // ---- Web view (brief archive) ----
+
+  app.get("/app/briefs", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    const { rows } = await db().query(
+      `SELECT id, generated_at, jsonb_array_length(risk_flags) AS flag_count
+       FROM briefs WHERE user_id = $1 ORDER BY generated_at DESC LIMIT 60`,
+      [uid],
+    );
+    const items =
+      rows.length === 0
+        ? `<p style="font-size:15px;color:#6b6b6b;">No briefs yet. Your first one arrives the morning after you connect a broker.</p>`
+        : `<ul style="margin:0;padding-left:0;list-style:none;">${rows
+            .map((r) => {
+              const date = new Date(r.generated_at).toISOString().slice(0, 10);
+              const flags = Number(r.flag_count) > 0 ? ` &middot; ${r.flag_count} risk flag(s)` : "";
+              return `<li style="margin:0 0 10px;font-size:15px;"><a href="/app/briefs/${r.id}" style="color:#8a6d3b;">${escapeHtml(date)}</a><span style="color:#6b6b6b;font-size:13px;">${flags}</span></li>`;
+            })
+            .join("\n")}</ul>`;
+    return reply.type("text/html").send(renderWebPage("Brief Archive", "", items));
+  });
+
+  app.get("/app/briefs/:id", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    const params = z.object({ id: z.coerce.number() }).safeParse(req.params);
+    if (!params.success) return reply.code(400).send({ error: "bad id" });
+    const { rows } = await db().query(
+      `SELECT market_summary_html, portfolio_section_html, generated_at
+       FROM briefs WHERE id = $1 AND user_id = $2`,
+      [params.data.id, uid],
+    );
+    const brief = rows[0];
+    if (!brief) return reply.code(404).send({ error: "not found" });
+    const date = new Date(brief.generated_at).toISOString().slice(0, 10);
+    return reply
+      .type("text/html")
+      .send(
+        renderWebPage(
+          "Daily Brief",
+          date,
+          `${brief.market_summary_html}\n${brief.portfolio_section_html}\n<p style="margin-top:20px;font-size:13px;"><a href="/app/briefs" style="color:#8a6d3b;">&larr; All briefs</a></p>`,
+        ),
+      );
+  });
+
+  // ---- Ops: LLM spend + cache-hit verification ----
+
+  app.get("/ops/usage", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    return { usage: await usageSummary(14) };
+  });
+
   // ---- Risk thresholds (configurable, PRD §5) ----
 
   app.put("/settings/thresholds", async (req, reply) => {
@@ -237,4 +422,12 @@ export function buildServer(): FastifyInstance {
 
 function bufferToStream(buf: Buffer): Readable {
   return Readable.from(buf);
+}
+
+async function hasTier(userId: number, tiers: string[]): Promise<boolean> {
+  const { rows } = await db().query(
+    `SELECT 1 FROM users WHERE id = $1 AND tier = ANY($2) AND subscription_status = 'active'`,
+    [userId, tiers],
+  );
+  return rows.length > 0;
 }

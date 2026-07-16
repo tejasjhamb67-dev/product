@@ -29,7 +29,12 @@ Key modules:
 | `src/risk/engine.ts` | Deterministic risk math (sector %, 90d correlations, margin %, overweight) |
 | `src/journal/patterns.ts` | Deterministic behavior flags (re-entry after loss, sizing drift, turnover) |
 | `src/brief/` | Prompts, shared market context, per-user generation, compliance guard, HTML |
-| `src/jobs/` | Daily brief pipeline, weekly journal, IST cron scheduler |
+| `src/risk/scenario.ts` | Scenario stress-tests (Pro): shocks → per-holding P&L via betas vs NIFTY |
+| `src/broker/kiteHistory.ts` | Daily close ingestion via Kite historical API (feeds correlations + betas) |
+| `src/brief/qa.ts` | Portfolio Q&A (Core/Pro): descriptive answers grounded in the risk snapshot |
+| `src/brief/usage.ts` | Per-call LLM token accounting (verifies the prompt-cache margin assumptions) |
+| `src/delivery/feedback.ts` | Signed one-click 👍/👎 links in the brief email |
+| `src/jobs/` | Daily brief pipeline, weekly journal, price ingestion, IST cron scheduler |
 | `src/http/server.ts` | Fastify API: OTP auth, Kite OAuth, CSV upload, brief history, Razorpay |
 
 ## Compliance posture (do not regress)
@@ -52,6 +57,18 @@ One-off jobs:
 ```bash
 npm run job:daily-brief
 npm run job:weekly-journal
+npm run job:prices        # backfill daily_prices from Kite historical API
+```
+
+Interactive endpoints (session cookie auth):
+
+```
+POST /ask                  { question }            Core/Pro — Q&A about your own book
+GET  /scenarios/presets                            list preset stress scenarios
+POST /scenarios/run        { preset | shocks }     Pro — deterministic P&L simulation
+GET  /app/briefs                                   web view of brief history
+GET  /ops/usage                                    LLM token spend + cache-hit data
+GET  /feedback?...&sig=                            signed 👍/👎 from the email
 ```
 
 Tests (deterministic modules — risk engine, journal, CSV, crypto, compliance guard):
@@ -62,7 +79,7 @@ npm test
 
 ## Notes / open items
 
-- `daily_prices` must be populated for the correlation module (PRD §10 open question: NSE/BSE public feed vs licensed data — resolve before scale).
+- `daily_prices` is populated by `job:prices` (also runs at the start of the daily brief job) using Kite's historical candles API — this requires the historical-data add-on on the Kite Connect subscription; without it the job logs and skips, and correlations/betas degrade gracefully. Longer term (PRD §10): evaluate NSE/BSE public feeds vs licensed data.
 - Razorpay plan IDs (Core ₹999 / Pro ₹2,499 monthly) are created in the dashboard and set via env.
 - Free tier = manual CSV + weekly journal only; Core/Pro = broker-connected daily brief.
 - Kite tokens expire ~6-7 AM IST daily; the daily job emails a reconnect nudge when a token has lapsed.

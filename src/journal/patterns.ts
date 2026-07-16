@@ -7,7 +7,11 @@
 import type { Trade } from "../broker/types.js";
 
 export interface JournalFlag {
-  kind: "reentry_after_loss" | "sizing_up_after_losses" | "high_turnover";
+  kind:
+    | "reentry_after_loss"
+    | "sizing_up_after_losses"
+    | "high_turnover"
+    | "holding_period_compression";
   detail: string;
   occurrences: number;
 }
@@ -154,12 +158,59 @@ export function detectHighTurnover(trades: Trade[]): JournalFlag | null {
   };
 }
 
-export function detectWeeklyPatterns(trades: Trade[]): JournalFlag[] {
+const COMPRESSION_RATIO = 0.5;
+const COMPRESSION_MIN_TRIPS = 5;
+
+/**
+ * Holding-period compression: the median round-trip holding period this week
+ * shrank to under COMPRESSION_RATIO of the previous week's median. Both weeks
+ * need at least COMPRESSION_MIN_TRIPS closed round trips to compare.
+ */
+export function detectHoldingPeriodCompression(
+  thisWeekTrades: Trade[],
+  previousWeekTrades: Trade[],
+): JournalFlag | null {
+  const current = pairRoundTrips(thisWeekTrades);
+  const previous = pairRoundTrips(previousWeekTrades);
+  if (current.length < COMPRESSION_MIN_TRIPS || previous.length < COMPRESSION_MIN_TRIPS) {
+    return null;
+  }
+  const holdMinutes = (trips: { entryAt: Date; exitAt: Date }[]): number[] =>
+    trips.map((t) => (t.exitAt.getTime() - t.entryAt.getTime()) / 60_000);
+  const currentMedian = median(holdMinutes(current));
+  const previousMedian = median(holdMinutes(previous));
+  if (previousMedian <= 0 || currentMedian / previousMedian >= COMPRESSION_RATIO) return null;
+
+  return {
+    kind: "holding_period_compression",
+    detail: `Median holding period compressed from ${formatMinutes(previousMedian)} last week to ${formatMinutes(currentMedian)} this week across ${current.length} round trips`,
+    occurrences: current.length,
+  };
+}
+
+export function detectWeeklyPatterns(
+  trades: Trade[],
+  previousWeekTrades: Trade[] = [],
+): JournalFlag[] {
   return [
     detectReentryAfterLoss(trades),
     detectSizingUpAfterLosses(trades),
     detectHighTurnover(trades),
+    detectHoldingPeriodCompression(trades, previousWeekTrades),
   ].filter((f): f is JournalFlag => f !== null);
+}
+
+function median(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+function formatMinutes(mins: number): string {
+  if (mins >= 24 * 60) return `${(mins / (24 * 60)).toFixed(1)} days`;
+  if (mins >= 60) return `${(mins / 60).toFixed(1)} hours`;
+  return `${Math.round(mins)} minutes`;
 }
 
 function sameDay(a: Date, b: Date): boolean {

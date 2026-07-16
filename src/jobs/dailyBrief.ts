@@ -11,6 +11,8 @@ import { getOrCreateMarketContext } from "../brief/marketContext.js";
 import { generateUserBrief } from "../brief/generate.js";
 import { renderDailyBrief, renderReauthNudge } from "../brief/render.js";
 import { sendEmail } from "../delivery/email.js";
+import { feedbackUrl } from "../delivery/feedback.js";
+import { ingestDailyPrices } from "../broker/kiteHistory.js";
 import { config } from "../config.js";
 
 function istDateString(now = new Date()): string {
@@ -63,6 +65,14 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
     return stats;
   }
 
+  // Refresh price history first (best-effort): correlations and scenario
+  // betas both read daily_prices.
+  try {
+    await ingestDailyPrices();
+  } catch (err) {
+    console.warn(`[daily-brief ${runDate}] price ingestion failed, continuing:`, err);
+  }
+
   // Shared market context: generated once, reused across every user below.
   const marketContext = await getOrCreateMarketContext(runDate);
   console.log(`[daily-brief ${runDate}] market context ready, ${users.length} users`);
@@ -93,29 +103,43 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
         holdings: snapshot.holdings,
         risk,
         thresholds,
+        userId: user.id,
       });
 
-      const { fullHtml, portfolioSectionHtml } = renderDailyBrief({
+      // Insert first so feedback links can carry the brief id.
+      const first = renderDailyBrief({
         dateLabel: runDate,
         marketSummaryHtml: marketContext.html,
         portfolioParagraphs: sections.portfolioReadthrough,
         riskNarration: sections.riskNarration,
         riskFlags: risk.flags,
-        webViewUrl: `${config().APP_BASE_URL}/briefs`,
       });
-
       const { rows } = await db().query(
         `INSERT INTO briefs (user_id, market_summary_html, portfolio_section_html, risk_flags)
          VALUES ($1, $2, $3, $4) RETURNING id`,
-        [user.id, marketContext.html, portfolioSectionHtml, JSON.stringify(risk.flags)],
+        [user.id, marketContext.html, first.portfolioSectionHtml, JSON.stringify(risk.flags)],
       );
+      const briefId = Number(rows[0].id);
+
+      const { fullHtml } = renderDailyBrief({
+        dateLabel: runDate,
+        marketSummaryHtml: marketContext.html,
+        portfolioParagraphs: sections.portfolioReadthrough,
+        riskNarration: sections.riskNarration,
+        riskFlags: risk.flags,
+        webViewUrl: `${config().APP_BASE_URL}/app/briefs`,
+        feedbackUrls: {
+          up: feedbackUrl(briefId, user.id, "up"),
+          down: feedbackUrl(briefId, user.id, "down"),
+        },
+      });
 
       await sendEmail({
         to: user.email,
         subject: `Meridian Daily Brief — ${runDate}`,
         html: fullHtml,
       });
-      await db().query("UPDATE briefs SET sent_at = now() WHERE id = $1", [rows[0].id]);
+      await db().query("UPDATE briefs SET sent_at = now() WHERE id = $1", [briefId]);
       stats.sent++;
     } catch (err) {
       stats.failed++;

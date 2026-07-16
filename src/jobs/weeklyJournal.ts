@@ -28,15 +28,20 @@ export async function runWeeklyJournalJob(): Promise<{ sent: number; failed: num
     [weekStart],
   );
 
+  const previousWeekStart = new Date(weekStart);
+  previousWeekStart.setUTCDate(previousWeekStart.getUTCDate() - 7);
+
   for (const user of users) {
     try {
+      // Two-week window: current week for the flags, previous week as the
+      // baseline for holding-period compression.
       const { rows } = await db().query(
         `SELECT ticker, side, quantity, price, segment, executed_at
          FROM trade_history WHERE user_id = $1 AND executed_at >= $2
          ORDER BY executed_at ASC`,
-        [user.id, weekStart],
+        [user.id, previousWeekStart],
       );
-      const trades: Trade[] = rows.map((r) => ({
+      const allTrades: Trade[] = rows.map((r) => ({
         ticker: r.ticker,
         side: r.side,
         quantity: Number(r.quantity),
@@ -45,8 +50,10 @@ export async function runWeeklyJournalJob(): Promise<{ sent: number; failed: num
         executedAt: new Date(r.executed_at),
         brokerTradeId: null,
       }));
+      const trades = allTrades.filter((t) => t.executedAt >= weekStart);
+      const previousWeekTrades = allTrades.filter((t) => t.executedAt < weekStart);
 
-      const flags = detectWeeklyPatterns(trades);
+      const flags = detectWeeklyPatterns(trades, previousWeekTrades);
 
       await db().query(
         `INSERT INTO journal_summaries (user_id, week_start, week_end, flags, sent_at)

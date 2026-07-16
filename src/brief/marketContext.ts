@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { db } from "../db/client.js";
 import { MARKET_CONTEXT_SYSTEM } from "./prompts.js";
 import { paragraphsToHtml } from "./render.js";
+import { recordUsage } from "./usage.js";
 
 export interface MarketContext {
   text: string;
@@ -35,6 +36,8 @@ export async function getOrCreateMarketContext(runDate: string): Promise<MarketC
       },
     ],
   });
+
+  await recordUsage("market_context", config().BRIEF_MODEL, response.usage);
 
   const text = response.content
     .filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")

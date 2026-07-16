@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectHighTurnover,
+  detectHoldingPeriodCompression,
   detectReentryAfterLoss,
   detectSizingUpAfterLosses,
   pairRoundTrips,
@@ -130,5 +131,39 @@ describe("detectHighTurnover", () => {
         t("NIFTY", "sell", 50, 101, "2026-07-13T05:00:00Z"),
       ]),
     ).toBeNull();
+  });
+});
+
+describe("detectHoldingPeriodCompression", () => {
+  // Build N round trips with a given holding period in minutes, one per hour.
+  const trips = (n: number, holdMinutes: number, dayOffset: number): Trade[] => {
+    const trades: Trade[] = [];
+    for (let i = 0; i < n; i++) {
+      const entry = new Date(Date.UTC(2026, 6, 6 + dayOffset, 4 + i, 0, 0));
+      const exit = new Date(entry.getTime() + holdMinutes * 60_000);
+      trades.push(t(`C${dayOffset}_${i}`, "buy", 10, 100, entry.toISOString()));
+      trades.push(t(`C${dayOffset}_${i}`, "sell", 10, 101, exit.toISOString()));
+    }
+    return trades;
+  };
+
+  it("flags when median holding period halves week over week", () => {
+    const previous = trips(6, 120, 0); // 2h holds last week
+    const current = trips(6, 20, 7); // 20min holds this week
+    const flag = detectHoldingPeriodCompression(current, previous);
+    expect(flag).not.toBeNull();
+    expect(flag!.detail).toContain("compressed");
+  });
+
+  it("does not flag stable holding periods", () => {
+    const previous = trips(6, 120, 0);
+    const current = trips(6, 110, 7);
+    expect(detectHoldingPeriodCompression(current, previous)).toBeNull();
+  });
+
+  it("requires enough round trips in both weeks", () => {
+    const previous = trips(2, 120, 0);
+    const current = trips(6, 10, 7);
+    expect(detectHoldingPeriodCompression(current, previous)).toBeNull();
   });
 });
