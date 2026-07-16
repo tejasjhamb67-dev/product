@@ -1,6 +1,6 @@
 # Meridian
 
-Read-only AI portfolio judgment layer for serious Indian retail traders. Connects to a user's Zerodha account (Kite Connect), generates a daily personalized cross-asset brief on their actual holdings, computes a deterministic portfolio risk snapshot, and journals trading behavior weekly.
+Read-only AI portfolio judgment layer for serious Indian retail traders. Connects to a user's Zerodha (Kite Connect) and Groww (Trade API) accounts, generates a daily personalized cross-asset brief on their actual holdings, computes a deterministic portfolio risk snapshot, and journals trading behavior weekly.
 
 **No order placement — ever.** This is a product and compliance invariant, not a missing feature: read-only analytics keeps Meridian outside SEBI's algo-provider/empanelment regime. Do not add order-placement code without a full compliance review.
 
@@ -26,6 +26,8 @@ Key modules:
 | Path | What |
 |---|---|
 | `src/broker/kite.ts` | Kite OAuth + read-only data pulls; daily token expiry + re-auth nudge |
+| `src/broker/groww.ts` | Groww key+secret auth (server re-mints daily tokens), holdings/positions/margins |
+| `src/broker/aggregate.ts` | Multi-broker aggregation: one book across Zerodha + Groww |
 | `src/risk/engine.ts` | Deterministic risk math (sector %, 90d correlations, margin %, overweight) |
 | `src/journal/patterns.ts` | Deterministic behavior flags (re-entry after loss, sizing drift, turnover) |
 | `src/brief/` | Prompts, shared market context, per-user generation, compliance guard, HTML |

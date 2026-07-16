@@ -3,6 +3,7 @@
 import { chromium } from "playwright";
 import { createSessionToken } from "../src/auth/session.js";
 import { config } from "../src/config.js";
+import { db, closeDb } from "../src/db/client.js";
 
 const OUT = process.argv[2] ?? "./screenshots";
 const executablePath = process.env.CHROMIUM_PATH; // optional override
@@ -16,7 +17,10 @@ await page.goto("http://localhost:3000/app", { waitUntil: "networkidle" });
 await page.screenshot({ path: `${OUT}/2-login.png` });
 await anon.close();
 
-const token = createSessionToken(1, config().SESSION_SIGNING_KEY);
+const { rows } = await db().query("SELECT id FROM users ORDER BY id DESC LIMIT 1");
+const demoUid = Number(rows[0]?.id ?? 1);
+await closeDb();
+const token = createSessionToken(demoUid, config().SESSION_SIGNING_KEY);
 const authed = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
 await authed.addCookies([
   { name: "meridian_session", value: token, domain: "localhost", path: "/" },
@@ -27,10 +31,12 @@ await page.waitForSelector("#holdings tbody tr");
 await page.screenshot({ path: `${OUT}/3-dashboard.png`, fullPage: true });
 
 await page.click("text=Nifty -3%, crude +5%");
-await page.waitForSelector("#scenario-result table");
+await page.waitForSelector("#scenario-bars div");
 await page.screenshot({ path: `${OUT}/4-scenario.png`, fullPage: true });
 
-await page.goto("http://localhost:3000/app/briefs/1", { waitUntil: "networkidle" });
+await page.goto("http://localhost:3000/app/briefs", { waitUntil: "networkidle" });
+await page.click("li a");
+await page.waitForLoadState("networkidle");
 await page.screenshot({ path: `${OUT}/5-brief.png`, fullPage: true });
 
 await browser.close();

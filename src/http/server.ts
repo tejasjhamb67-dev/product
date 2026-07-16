@@ -7,6 +7,7 @@ import { db } from "../db/client.js";
 import { issueOtp, verifyOtp } from "../auth/otp.js";
 import { createSessionToken, verifySessionToken } from "../auth/session.js";
 import { completeKiteLogin, kiteLoginUrl } from "../broker/kite.js";
+import { connectGroww } from "../broker/groww.js";
 import { parseHoldingsCsv, CSV_TEMPLATE } from "../portfolio/csv.js";
 import {
   createSubscription,
@@ -19,7 +20,8 @@ import { answerPortfolioQuestion, QaRateLimitError } from "../brief/qa.js";
 import { usageSummary } from "../brief/usage.js";
 import { loadCurrentBook } from "../portfolio/current.js";
 import { computeRiskSnapshot, DEFAULT_THRESHOLDS } from "../risk/engine.js";
-import { loadPriceSeries } from "../risk/prices.js";
+import { loadPriceSeries, loadDatedPriceSeries } from "../risk/prices.js";
+import { dailyReturns, pearson } from "../risk/engine.js";
 import { PRESET_SCENARIOS, runScenario, type Scenario } from "../risk/scenario.js";
 import { NIFTY_INDEX_TICKER } from "../broker/kiteHistory.js";
 import { renderWebPage, escapeHtml } from "../brief/render.js";
@@ -92,6 +94,7 @@ export function buildServer(): FastifyInstance {
       .map((h) => ({
         ticker: h.ticker,
         sector: sectorFor(h.ticker),
+        broker: h.broker ?? null,
         quantity: h.quantity,
         value: marketValue(h),
         weightPct: risk.stockWeights.find((w) => w.ticker === h.ticker)?.weightPct ?? 0,
@@ -102,6 +105,60 @@ export function buildServer(): FastifyInstance {
       `SELECT id, generated_at, jsonb_array_length(risk_flags) AS flag_count
        FROM briefs WHERE user_id = $1 ORDER BY generated_at DESC LIMIT 10`,
       [uid],
+    );
+
+    // ---- Chart data ----
+    // Portfolio value trend: sum of qty x close per session, over the dates
+    // every priced ticker shares (so the line never jumps from missing data).
+    const tickers = book.holdings.map((h) => h.ticker);
+    const dated = await loadDatedPriceSeries(tickers);
+    const qtyByTicker = new Map<string, number>();
+    for (const h of book.holdings) {
+      qtyByTicker.set(h.ticker, (qtyByTicker.get(h.ticker) ?? 0) + h.quantity);
+    }
+    const pricedTickers = [...dated.keys()].filter((t) => (dated.get(t)?.length ?? 0) >= 10);
+    let valueSeries: { date: string; value: number }[] = [];
+    let valueCoveragePct = 0;
+    if (pricedTickers.length > 0) {
+      let commonDates = new Set(dated.get(pricedTickers[0]!)!.map((p) => p.date));
+      for (const t of pricedTickers.slice(1)) {
+        const ds = new Set(dated.get(t)!.map((p) => p.date));
+        commonDates = new Set([...commonDates].filter((d) => ds.has(d)));
+      }
+      const sorted = [...commonDates].sort();
+      const closeLookup = new Map<string, Map<string, number>>();
+      for (const t of pricedTickers) {
+        closeLookup.set(t, new Map(dated.get(t)!.map((p) => [p.date, p.close])));
+      }
+      valueSeries = sorted.map((date) => ({
+        date,
+        value:
+          Math.round(
+            pricedTickers.reduce(
+              (s, t) => s + Math.abs(qtyByTicker.get(t) ?? 0) * (closeLookup.get(t)!.get(date) ?? 0),
+              0,
+            ) * 100,
+          ) / 100,
+      }));
+      const pricedValue = book.holdings
+        .filter((h) => pricedTickers.includes(h.ticker))
+        .reduce((s, h) => s + Math.abs(h.quantity) * (h.lastPrice ?? h.avgPrice), 0);
+      valueCoveragePct = risk.totalValue > 0 ? Math.round((pricedValue / risk.totalValue) * 100) : 0;
+    }
+
+    // Correlation matrix of the top-4 priced holdings.
+    const corrTickers = risk.stockWeights
+      .map((w) => w.ticker)
+      .filter((t) => (priceSeries.get(t)?.length ?? 0) >= 30)
+      .slice(0, 4);
+    const corrMatrix = corrTickers.map((a) =>
+      corrTickers.map((b) =>
+        a === b
+          ? 1
+          : Math.round(
+              pearson(dailyReturns(priceSeries.get(a)!), dailyReturns(priceSeries.get(b)!)) * 100,
+            ) / 100,
+      ),
     );
 
     return {
@@ -116,6 +173,11 @@ export function buildServer(): FastifyInstance {
         date: new Date(b.generated_at).toISOString().slice(0, 10),
         flagCount: Number(b.flag_count),
       })),
+      charts: {
+        valueSeries,
+        valueCoveragePct,
+        correlation: { tickers: corrTickers, matrix: corrMatrix },
+      },
     };
   });
 
@@ -167,6 +229,23 @@ export function buildServer(): FastifyInstance {
     if (!query.success) return reply.code(400).send({ error: "missing request_token" });
     await completeKiteLogin(uid, query.data.request_token);
     return { ok: true, connected: "zerodha" };
+  });
+
+  // Groww connects with an API key + secret (generated at groww.in/trade-api);
+  // the server re-mints the daily token itself, so no morning re-auth needed.
+  app.post("/broker/groww/connect", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+    const body = z
+      .object({ apiKey: z.string().min(8).max(500), apiSecret: z.string().min(8).max(500) })
+      .safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "expected { apiKey, apiSecret }" });
+    try {
+      await connectGroww(uid, body.data.apiKey, body.data.apiSecret);
+    } catch (err: any) {
+      return reply.code(422).send({ error: `Groww rejected the credentials: ${err.message}` });
+    }
+    return { ok: true, connected: "groww" };
   });
 
   app.get("/broker/status", async (req, reply) => {

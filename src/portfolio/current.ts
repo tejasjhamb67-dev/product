@@ -1,10 +1,10 @@
 import { db } from "../db/client.js";
-import { pullBrokerSnapshot } from "../broker/kite.js";
+import { pullAllBrokers } from "../broker/aggregate.js";
 import type { Holding, MarginSummary } from "../broker/types.js";
 
 // Resolves a user's current book for interactive features (Q&A, scenarios):
-// live broker pull when a valid token exists, otherwise the latest stored
-// snapshot (broker or manual CSV).
+// live pull across all connected brokers when possible, otherwise the latest
+// stored snapshot (broker or manual CSV).
 
 export interface CurrentBook {
   holdings: Holding[];
@@ -14,7 +14,7 @@ export interface CurrentBook {
 
 export async function loadCurrentBook(userId: number): Promise<CurrentBook | null> {
   try {
-    const live = await pullBrokerSnapshot(userId);
+    const live = await pullAllBrokers(userId);
     if (live && live.holdings.length > 0) {
       return { holdings: live.holdings, margins: live.margins, source: "live" };
     }
@@ -26,7 +26,7 @@ export async function loadCurrentBook(userId: number): Promise<CurrentBook | nul
   // manual CSV rows land within a second of each other — a 1-minute window
   // around the max groups them safely.
   const { rows } = await db().query(
-    `SELECT ticker, quantity, avg_price, last_price, segment FROM holdings_snapshot
+    `SELECT ticker, quantity, avg_price, last_price, segment, broker FROM holdings_snapshot
      WHERE user_id = $1
        AND captured_at >= (
          SELECT max(captured_at) - interval '1 minute' FROM holdings_snapshot WHERE user_id = $1
@@ -41,6 +41,7 @@ export async function loadCurrentBook(userId: number): Promise<CurrentBook | nul
     avgPrice: Number(r.avg_price),
     lastPrice: r.last_price != null ? Number(r.last_price) : null,
     segment: r.segment,
+    broker: r.broker ?? undefined,
   }));
   return { holdings, margins: null, source: "snapshot" };
 }

@@ -4,7 +4,8 @@
 
 import { fileURLToPath } from "node:url";
 import { db, closeDb } from "../db/client.js";
-import { pullBrokerSnapshot, persistSnapshot, kiteLoginUrl } from "../broker/kite.js";
+import { persistSnapshot } from "../broker/kite.js";
+import { pullAllBrokers } from "../broker/aggregate.js";
 import { computeRiskSnapshot, DEFAULT_THRESHOLDS, type Thresholds } from "../risk/engine.js";
 import { loadPriceSeries } from "../risk/prices.js";
 import { PRESET_SCENARIOS, runScenario, stressLineFor } from "../risk/scenario.js";
@@ -88,18 +89,20 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
 
   for (const user of users) {
     try {
-      const snapshot = await pullBrokerSnapshot(user.id);
-      if (!snapshot) {
-        // Token expired — the re-auth nudge flow (deployment plan day 13-14).
-        await sendEmail({
-          to: user.email,
-          subject: "Meridian: reconnect Zerodha to get today's brief",
-          html: renderReauthNudge(`${config().APP_BASE_URL}/broker/kite/login`),
-        });
-        stats.reauthNudged++;
+      const snapshot = await pullAllBrokers(user.id);
+      if (!snapshot || snapshot.holdings.length === 0) {
+        // Zerodha's daily token expiry needs the user's hands; Groww re-mints
+        // its own tokens, so only a failed Kite pull triggers the nudge.
+        if (snapshot?.failed.includes("zerodha")) {
+          await sendEmail({
+            to: user.email,
+            subject: "Meridian: reconnect Zerodha to get today's brief",
+            html: renderReauthNudge(`${config().APP_BASE_URL}/broker/kite/login`),
+          });
+          stats.reauthNudged++;
+        }
         continue;
       }
-      if (snapshot.holdings.length === 0) continue;
 
       await persistSnapshot(user.id, snapshot);
 

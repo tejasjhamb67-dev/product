@@ -18,16 +18,18 @@ const DEMO_EMAIL = "demo@meridian.example";
 // A concentrated-on-purpose book: heavy BFSI (triggers the sector flag),
 // two correlated banks, an index future hedge, and one option (excluded
 // from stress math, demonstrating the honesty note).
+// Multi-broker demo: F&O + core bank book on Zerodha, long-term equity
+// holdings on Groww — the union is one aggregated book.
 const HOLDINGS: Holding[] = [
-  { ticker: "HDFCBANK", quantity: 120, avgPrice: 1480, lastPrice: 1552, segment: "equity" },
-  { ticker: "ICICIBANK", quantity: 150, avgPrice: 1015, lastPrice: 1098, segment: "equity" },
-  { ticker: "BAJFINANCE", quantity: 25, avgPrice: 6900, lastPrice: 7285, segment: "equity" },
-  { ticker: "RELIANCE", quantity: 60, avgPrice: 2410, lastPrice: 2530, segment: "equity" },
-  { ticker: "TCS", quantity: 45, avgPrice: 3890, lastPrice: 4102, segment: "equity" },
-  { ticker: "TATAMOTORS", quantity: 110, avgPrice: 905, lastPrice: 968, segment: "equity" },
-  { ticker: "SUNPHARMA", quantity: 55, avgPrice: 1610, lastPrice: 1685, segment: "equity" },
-  { ticker: "NIFTY25JULFUT", quantity: -25, avgPrice: 24980, lastPrice: 25120, segment: "fno" },
-  { ticker: "BANKNIFTY25JUL53000CE", quantity: 30, avgPrice: 420, lastPrice: 385, segment: "fno" },
+  { ticker: "HDFCBANK", quantity: 120, avgPrice: 1480, lastPrice: 1552, segment: "equity", broker: "zerodha" },
+  { ticker: "ICICIBANK", quantity: 150, avgPrice: 1015, lastPrice: 1098, segment: "equity", broker: "zerodha" },
+  { ticker: "BAJFINANCE", quantity: 25, avgPrice: 6900, lastPrice: 7285, segment: "equity", broker: "zerodha" },
+  { ticker: "RELIANCE", quantity: 60, avgPrice: 2410, lastPrice: 2530, segment: "equity", broker: "groww" },
+  { ticker: "TCS", quantity: 45, avgPrice: 3890, lastPrice: 4102, segment: "equity", broker: "groww" },
+  { ticker: "TATAMOTORS", quantity: 110, avgPrice: 905, lastPrice: 968, segment: "equity", broker: "groww" },
+  { ticker: "SUNPHARMA", quantity: 55, avgPrice: 1610, lastPrice: 1685, segment: "equity", broker: "groww" },
+  { ticker: "NIFTY25JULFUT", quantity: -25, avgPrice: 24980, lastPrice: 25120, segment: "fno", broker: "zerodha" },
+  { ticker: "BANKNIFTY25JUL53000CE", quantity: 30, avgPrice: 420, lastPrice: 385, segment: "fno", broker: "zerodha" },
 ];
 
 // Deterministic pseudo-random walk (mulberry32) so re-seeding is stable.
@@ -102,9 +104,9 @@ async function main(): Promise<void> {
   // Holdings snapshot
   for (const h of HOLDINGS) {
     await pool.query(
-      `INSERT INTO holdings_snapshot (user_id, source, ticker, quantity, avg_price, last_price, segment)
-       VALUES ($1, 'broker', $2, $3, $4, $5, $6)`,
-      [uid, h.ticker, h.quantity, h.avgPrice, h.lastPrice, h.segment],
+      `INSERT INTO holdings_snapshot (user_id, source, ticker, quantity, avg_price, last_price, segment, broker)
+       VALUES ($1, 'broker', $2, $3, $4, $5, $6, $7)`,
+      [uid, h.ticker, h.quantity, h.avgPrice, h.lastPrice, h.segment, h.broker],
     );
   }
 

@@ -23,3 +23,31 @@ export async function loadPriceSeries(tickers: string[], days = 90): Promise<Map
   }
   return series;
 }
+
+export interface DatedClose {
+  date: string; // YYYY-MM-DD
+  close: number;
+}
+
+/** Same as loadPriceSeries but keeps the dates — used for charting. */
+export async function loadDatedPriceSeries(
+  tickers: string[],
+  days = 90,
+): Promise<Map<string, DatedClose[]>> {
+  const series = new Map<string, DatedClose[]>();
+  if (tickers.length === 0) return series;
+  const { rows } = await db().query(
+    `SELECT ticker, close, price_date FROM (
+       SELECT ticker, close, price_date,
+              row_number() OVER (PARTITION BY ticker ORDER BY price_date DESC) AS rn
+       FROM daily_prices WHERE ticker = ANY($1)
+     ) t WHERE rn <= $2 ORDER BY ticker, price_date ASC`,
+    [tickers, days],
+  );
+  for (const row of rows) {
+    const arr = series.get(row.ticker) ?? [];
+    arr.push({ date: new Date(row.price_date).toISOString().slice(0, 10), close: Number(row.close) });
+    series.set(row.ticker, arr);
+  }
+  return series;
+}

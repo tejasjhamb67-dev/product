@@ -152,9 +152,9 @@ export async function persistSnapshot(userId: number, snapshot: BrokerSnapshot):
     await client.query("BEGIN");
     for (const h of snapshot.holdings) {
       await client.query(
-        `INSERT INTO holdings_snapshot (user_id, source, ticker, quantity, avg_price, last_price, segment)
-         VALUES ($1, 'broker', $2, $3, $4, $5, $6)`,
-        [userId, h.ticker, h.quantity, h.avgPrice, h.lastPrice, h.segment],
+        `INSERT INTO holdings_snapshot (user_id, source, ticker, quantity, avg_price, last_price, segment, broker)
+         VALUES ($1, 'broker', $2, $3, $4, $5, $6, $7)`,
+        [userId, h.ticker, h.quantity, h.avgPrice, h.lastPrice, h.segment, h.broker ?? "zerodha"],
       );
     }
     for (const t of snapshot.trades) {

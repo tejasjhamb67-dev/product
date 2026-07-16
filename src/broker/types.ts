@@ -1,9 +1,12 @@
+export type BrokerName = "zerodha" | "groww";
+
 export interface Holding {
   ticker: string;
   quantity: number;
   avgPrice: number;
   lastPrice: number | null;
   segment: "equity" | "fno";
+  broker?: BrokerName;
 }
 
 export interface Trade {
