@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betaVsIndex, PRESET_SCENARIOS, runScenario } from "../src/risk/scenario.js";
+import { betaVsIndex, formatInr, instrumentKind, PRESET_SCENARIOS, runScenario, stressLineFor } from "../src/risk/scenario.js";
 import type { Holding } from "../src/broker/types.js";
 
 const h = (
@@ -83,15 +83,38 @@ describe("runScenario", () => {
     expect(result.totalPnl).toBeCloseTo(-30, 0);
   });
 
-  it("index derivatives track the index one-for-one", () => {
+  it("index futures track the index one-for-one", () => {
     const result = runScenario(
-      [h("BANKNIFTY25JAN48000CE", 30, 500, "fno")],
+      [h("BANKNIFTY25JANFUT", 30, 500, "fno")],
       { name: "rally", shocks: { indexPct: 3 } },
       new Map(),
       [],
     );
     expect(result.impacts[0]!.beta).toBe(1);
     expect(result.impacts[0]!.pnl).toBeCloseTo(450, 0); // 15000 * 3%
+  });
+
+  it("options are excluded from linear stress math and reported", () => {
+    const result = runScenario(
+      [h("BANKNIFTY25JAN48000CE", 30, 500, "fno"), h("HDFCBANK", 10, 100)],
+      { name: "crash", shocks: { indexPct: -5 } },
+      new Map(),
+      [],
+    );
+    expect(result.excludedOptions).toEqual(["BANKNIFTY25JAN48000CE"]);
+    const option = result.impacts.find((i) => i.ticker === "BANKNIFTY25JAN48000CE")!;
+    expect(option.basis).toBe("excluded_option");
+    expect(option.pnl).toBe(0);
+    // Totals only count the stressed (non-option) book.
+    expect(result.totalExposure).toBe(1000);
+    expect(result.totalPnl).toBeCloseTo(-50, 0);
+  });
+
+  it("classifies instruments", () => {
+    expect(instrumentKind("RELIANCE", "equity")).toBe("equity");
+    expect(instrumentKind("NIFTY25JANFUT", "fno")).toBe("future");
+    expect(instrumentKind("NIFTY25JAN23000CE", "fno")).toBe("option");
+    expect(instrumentKind("BANKNIFTY25JAN48000PE", "fno")).toBe("option");
   });
 
   it("pnlPctOfBook uses gross exposure", () => {
@@ -114,5 +137,31 @@ describe("runScenario", () => {
         preset.shocks.tickerPct !== undefined;
       expect(hasShock).toBe(true);
     }
+  });
+});
+
+describe("stressLineFor / formatInr", () => {
+  it("formats INR with Indian digit grouping", () => {
+    expect(formatInr(-42342.4)).toBe("-₹42,342");
+    expect(formatInr(1250000)).toBe("+₹12,50,000");
+  });
+
+  it("mentions excluded options only when present", () => {
+    const base = runScenario(
+      [h("HDFCBANK", 100, 1500)],
+      { name: "Nifty -3%", shocks: { indexPct: -3 } },
+      new Map(),
+      [],
+    );
+    expect(stressLineFor(base)).toContain("Nifty -3%");
+    expect(stressLineFor(base)).not.toContain("Option positions");
+
+    const withOption = runScenario(
+      [h("HDFCBANK", 100, 1500), h("NIFTY25JAN23000CE", 75, 200, "fno")],
+      { name: "Nifty -3%", shocks: { indexPct: -3 } },
+      new Map(),
+      [],
+    );
+    expect(stressLineFor(withOption)).toContain("NIFTY25JAN23000CE");
   });
 });

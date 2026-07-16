@@ -30,6 +30,7 @@ const DISCLAIMER =
 function shell(title: string, dateLabel: string, body: string): string {
   return `<!doctype html>
 <html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f5f4f0;font-family:Georgia,'Times New Roman',serif;">
   <div style="max-width:600px;margin:0 auto;padding:32px 20px;">
     <div style="border-bottom:2px solid #1a1a1a;padding-bottom:12px;margin-bottom:24px;">
@@ -66,15 +67,30 @@ export function renderDailyBrief(input: {
   portfolioParagraphs: string[];
   riskNarration: string;
   riskFlags: RiskFlag[];
+  /** Deterministic scenario sentence (computed, never LLM-generated). */
+  stressLine?: string;
+  /** Monday callback: last week's journal flags, descriptive one-liners. */
+  journalCallback?: string[];
   webViewUrl?: string;
   feedbackUrls?: { up: string; down: string };
 }): { fullHtml: string; portfolioSectionHtml: string } {
+  const journalSection =
+    input.journalCallback && input.journalCallback.length > 0
+      ? `${sectionHeading("Last week's patterns")}<ul style="margin:0;padding-left:18px;">${input.journalCallback
+          .map(
+            (f) =>
+              `<li style="margin:0 0 8px;line-height:1.5;color:#1a1a1a;font-size:14px;">${escapeHtml(f)}</li>`,
+          )
+          .join("\n")}</ul>`
+      : "";
+
   const portfolioSectionHtml = [
     sectionHeading("Your book"),
     paragraphsToHtml(input.portfolioParagraphs),
     sectionHeading("Risk snapshot"),
-    paragraphsToHtml([input.riskNarration]),
+    paragraphsToHtml(input.stressLine ? [input.riskNarration, input.stressLine] : [input.riskNarration]),
     renderRiskFlagsHtml(input.riskFlags),
+    journalSection,
   ].join("\n");
 
   const webViewLink = input.webViewUrl

@@ -23,6 +23,9 @@ import { loadPriceSeries } from "../risk/prices.js";
 import { PRESET_SCENARIOS, runScenario, type Scenario } from "../risk/scenario.js";
 import { NIFTY_INDEX_TICKER } from "../broker/kiteHistory.js";
 import { renderWebPage, escapeHtml } from "../brief/render.js";
+import { landingPage, loginPage, dashboardPage } from "./pages.js";
+import { sectorFor } from "../risk/sectors.js";
+import { marketValue } from "../risk/engine.js";
 
 const SESSION_COOKIE = "meridian_session";
 
@@ -47,6 +50,74 @@ export function buildServer(): FastifyInstance {
   void app.register(cookie);
 
   app.get("/health", async () => ({ ok: true }));
+
+  // ---- Web UI ----
+
+  app.get("/", async (_req, reply) => reply.type("text/html; charset=utf-8").send(landingPage()));
+
+  app.get("/app", async (req, reply) => {
+    const token = req.cookies[SESSION_COOKIE];
+    const payload = token ? verifySessionToken(token, config().SESSION_SIGNING_KEY) : null;
+    return reply.type("text/html; charset=utf-8").send(payload ? dashboardPage() : loginPage());
+  });
+
+  app.get("/api/dashboard", async (req, reply) => {
+    const uid = requireAuth(req, reply);
+    if (uid == null) return;
+
+    const { rows: userRows } = await db().query(
+      `SELECT email, tier, subscription_status FROM users WHERE id = $1`,
+      [uid],
+    );
+    const user = userRows[0];
+    if (!user) return reply.code(404).send({ error: "user not found" });
+
+    const book = await loadCurrentBook(uid);
+    if (!book) {
+      return {
+        email: user.email,
+        tier: user.tier,
+        book: null,
+        holdings: [],
+        risk: null,
+        presets: PRESET_SCENARIOS.map((p) => ({ name: p.name })),
+        briefs: [],
+      };
+    }
+
+    const priceSeries = await loadPriceSeries(book.holdings.map((h) => h.ticker));
+    const risk = computeRiskSnapshot(book.holdings, book.margins, priceSeries, DEFAULT_THRESHOLDS);
+
+    const holdings = book.holdings
+      .map((h) => ({
+        ticker: h.ticker,
+        sector: sectorFor(h.ticker),
+        quantity: h.quantity,
+        value: marketValue(h),
+        weightPct: risk.stockWeights.find((w) => w.ticker === h.ticker)?.weightPct ?? 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    const { rows: briefRows } = await db().query(
+      `SELECT id, generated_at, jsonb_array_length(risk_flags) AS flag_count
+       FROM briefs WHERE user_id = $1 ORDER BY generated_at DESC LIMIT 10`,
+      [uid],
+    );
+
+    return {
+      email: user.email,
+      tier: user.tier,
+      book: { source: book.source },
+      holdings,
+      risk,
+      presets: PRESET_SCENARIOS.map((p) => ({ name: p.name })),
+      briefs: briefRows.map((b) => ({
+        id: Number(b.id),
+        date: new Date(b.generated_at).toISOString().slice(0, 10),
+        flagCount: Number(b.flag_count),
+      })),
+    };
+  });
 
   // ---- Auth (email/OTP) ----
 
@@ -356,7 +427,7 @@ export function buildServer(): FastifyInstance {
               return `<li style="margin:0 0 10px;font-size:15px;"><a href="/app/briefs/${r.id}" style="color:#8a6d3b;">${escapeHtml(date)}</a><span style="color:#6b6b6b;font-size:13px;">${flags}</span></li>`;
             })
             .join("\n")}</ul>`;
-    return reply.type("text/html").send(renderWebPage("Brief Archive", "", items));
+    return reply.type("text/html; charset=utf-8").send(renderWebPage("Brief Archive", "", items));
   });
 
   app.get("/app/briefs/:id", async (req, reply) => {

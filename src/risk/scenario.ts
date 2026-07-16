@@ -38,7 +38,7 @@ export interface HoldingImpact {
   /** The percent move applied to this holding. */
   appliedShockPct: number;
   /** How the shock was resolved. */
-  basis: "ticker" | "sector" | "index_beta" | "none";
+  basis: "ticker" | "sector" | "index_beta" | "none" | "excluded_option";
   /** Beta used when basis is index_beta. */
   beta: number | null;
   pnl: number;
@@ -48,9 +48,29 @@ export interface ScenarioResult {
   scenario: Scenario;
   totalPnl: number;
   totalExposure: number;
-  /** P&L as percent of gross book value. */
+  /** P&L as percent of gross book value (options excluded from both sides). */
   pnlPctOfBook: number;
   impacts: HoldingImpact[];
+  /**
+   * Option positions excluded from the linear stress math. An option's payoff
+   * is convex (delta/gamma), so pretending it moves 1:1 with a spot shock
+   * would be dishonest — we exclude and say so rather than fake it.
+   * Phase 2: delta-adjusted stress once an option-chain feed exists.
+   */
+  excludedOptions: string[];
+}
+
+export type InstrumentKind = "equity" | "future" | "option";
+
+/**
+ * Classifies an instrument from its NFO trading symbol. Options end in CE/PE
+ * after a strike (e.g. BANKNIFTY25JAN48000CE); futures end in FUT.
+ */
+export function instrumentKind(ticker: string, segment: "equity" | "fno"): InstrumentKind {
+  if (segment === "equity") return "equity";
+  const upper = ticker.toUpperCase();
+  if (/\d(CE|PE)$/.test(upper)) return "option";
+  return "future";
 }
 
 /**
@@ -88,11 +108,26 @@ export function runScenario(
   indexCloses: number[],
 ): ScenarioResult {
   const impacts: HoldingImpact[] = [];
+  const excludedOptions: string[] = [];
 
   for (const h of holdings) {
     const price = h.lastPrice ?? h.avgPrice;
     const exposure = h.quantity * price; // signed: shorts are negative
     const sector = sectorFor(h.ticker);
+
+    if (instrumentKind(h.ticker, h.segment) === "option") {
+      excludedOptions.push(h.ticker);
+      impacts.push({
+        ticker: h.ticker,
+        sector,
+        exposure: round2(exposure),
+        appliedShockPct: 0,
+        basis: "excluded_option",
+        beta: null,
+        pnl: 0,
+      });
+      continue;
+    }
 
     let appliedShockPct = 0;
     let basis: HoldingImpact["basis"] = "none";
@@ -130,8 +165,9 @@ export function runScenario(
     });
   }
 
-  const totalPnl = round2(impacts.reduce((s, i) => s + i.pnl, 0));
-  const totalExposure = round2(impacts.reduce((s, i) => s + Math.abs(i.exposure), 0));
+  const stressed = impacts.filter((i) => i.basis !== "excluded_option");
+  const totalPnl = round2(stressed.reduce((s, i) => s + i.pnl, 0));
+  const totalExposure = round2(stressed.reduce((s, i) => s + Math.abs(i.exposure), 0));
 
   return {
     scenario,
@@ -139,6 +175,7 @@ export function runScenario(
     totalExposure,
     pnlPctOfBook: totalExposure > 0 ? round2((totalPnl / totalExposure) * 100) : 0,
     impacts: impacts.sort((a, b) => a.pnl - b.pnl),
+    excludedOptions,
   };
 }
 
@@ -164,6 +201,24 @@ export const PRESET_SCENARIOS: Scenario[] = [
   },
   { name: "Relief rally +3%", shocks: { indexPct: 3 } },
 ];
+
+/**
+ * One descriptive sentence for the daily brief. Deterministic — this is
+ * computed output, not LLM prose, so it costs nothing and can't hallucinate.
+ */
+export function stressLineFor(result: ScenarioResult): string {
+  const pnl = formatInr(result.totalPnl);
+  let line = `Stress check (${result.scenario.name}): approximately ${pnl} (${result.pnlPctOfBook}% of the stressed book) at current exposures.`;
+  if (result.excludedOptions.length > 0) {
+    line += ` Option positions (${result.excludedOptions.join(", ")}) are excluded from this linear estimate.`;
+  }
+  return line;
+}
+
+export function formatInr(n: number): string {
+  const sign = n < 0 ? "-" : "+";
+  return `${sign}₹${Math.abs(Math.round(n)).toLocaleString("en-IN")}`;
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;

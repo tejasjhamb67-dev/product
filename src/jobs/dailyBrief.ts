@@ -7,6 +7,8 @@ import { db, closeDb } from "../db/client.js";
 import { pullBrokerSnapshot, persistSnapshot, kiteLoginUrl } from "../broker/kite.js";
 import { computeRiskSnapshot, DEFAULT_THRESHOLDS, type Thresholds } from "../risk/engine.js";
 import { loadPriceSeries } from "../risk/prices.js";
+import { PRESET_SCENARIOS, runScenario, stressLineFor } from "../risk/scenario.js";
+import { NIFTY_INDEX_TICKER } from "../broker/kiteHistory.js";
 import { getOrCreateMarketContext } from "../brief/marketContext.js";
 import { generateUserBrief } from "../brief/generate.js";
 import { renderDailyBrief, renderReauthNudge } from "../brief/render.js";
@@ -17,6 +19,13 @@ import { config } from "../config.js";
 
 function istDateString(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(now); // YYYY-MM-DD
+}
+
+function isIstMonday(now = new Date()): boolean {
+  return (
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }).format(now) ===
+    "Mon"
+  );
 }
 
 interface BriefUser {
@@ -95,8 +104,33 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
       await persistSnapshot(user.id, snapshot);
 
       const thresholds = await loadThresholds(user.id);
-      const priceSeries = await loadPriceSeries(snapshot.holdings.map((h) => h.ticker));
+      const priceSeries = await loadPriceSeries([
+        ...snapshot.holdings.map((h) => h.ticker),
+        NIFTY_INDEX_TICKER,
+      ]);
       const risk = computeRiskSnapshot(snapshot.holdings, snapshot.margins, priceSeries, thresholds);
+
+      // Deterministic stress line: what a 3% Nifty drop maps to on this book.
+      const stressScenario = PRESET_SCENARIOS.find((s) => s.name === "Nifty -3%")!;
+      const stress = runScenario(
+        snapshot.holdings,
+        stressScenario,
+        priceSeries,
+        priceSeries.get(NIFTY_INDEX_TICKER) ?? [],
+      );
+      const stressLine = stress.totalExposure > 0 ? stressLineFor(stress) : undefined;
+
+      // Monday briefs carry last week's journal flags as a callback.
+      let journalCallback: string[] | undefined;
+      if (isIstMonday()) {
+        const { rows: journalRows } = await db().query(
+          `SELECT flags FROM journal_summaries
+           WHERE user_id = $1 ORDER BY week_start DESC LIMIT 1`,
+          [user.id],
+        );
+        const flags = (journalRows[0]?.flags ?? []) as { detail: string }[];
+        if (flags.length > 0) journalCallback = flags.map((f) => f.detail);
+      }
 
       const sections = await generateUserBrief({
         marketContextText: marketContext.text,
@@ -113,6 +147,8 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
         portfolioParagraphs: sections.portfolioReadthrough,
         riskNarration: sections.riskNarration,
         riskFlags: risk.flags,
+        stressLine,
+        journalCallback,
       });
       const { rows } = await db().query(
         `INSERT INTO briefs (user_id, market_summary_html, portfolio_section_html, risk_flags)
@@ -127,6 +163,8 @@ export async function runDailyBriefJob(options: { onlyUserId?: number } = {}): P
         portfolioParagraphs: sections.portfolioReadthrough,
         riskNarration: sections.riskNarration,
         riskFlags: risk.flags,
+        stressLine,
+        journalCallback,
         webViewUrl: `${config().APP_BASE_URL}/app/briefs`,
         feedbackUrls: {
           up: feedbackUrl(briefId, user.id, "up"),

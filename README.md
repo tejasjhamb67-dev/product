@@ -43,6 +43,25 @@ Key modules:
 - Broker tokens: AES-256-GCM encrypted at rest, expire daily with Kite's token lifecycle, never logged, **never sent to the LLM** (the model sees only processed holdings/risk JSON).
 - Get securities-lawyer review of output copy before public launch (deployment plan §4).
 
+## Deploying (Render, ~10 minutes)
+
+This is a persistent server (Fastify + in-process cron), so it needs a real
+process — **not** Vercel serverless. The repo ships a Render blueprint:
+
+1. Push this repo to GitHub.
+2. render.com → New → **Blueprint** → select the repo (`render.yaml` is picked up).
+3. Fill in the prompted secrets: `ANTHROPIC_API_KEY`, `KITE_API_KEY`/`SECRET`
+   (from developers.kite.trade, ₹2000/mo + historical add-on), `RESEND_API_KEY`
+   + a verified sender for `EMAIL_FROM`, and the Razorpay keys/plan IDs.
+   Set `APP_BASE_URL` to the Render URL (or your domain).
+4. In the Kite developer console, set the redirect URL to
+   `https://<your-domain>/broker/kite/callback`.
+5. Postgres, migrations (run on boot), and the schedulers come up automatically.
+
+Railway/Fly work the same way via the `Dockerfile`. To try it locally without
+any external accounts: `npm run seed:demo` then `npm run dev` and sign in is
+bypassed by seeding — see `scripts/seedDemo.ts`.
+
 ## Running
 
 ```bash
