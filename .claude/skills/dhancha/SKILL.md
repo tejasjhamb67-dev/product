@@ -7,10 +7,10 @@ description: >-
   governance red flags), and technical analysis (trend, momentum, volumes,
   relative strength) — with all data fetched LIVE from the web at invocation
   time. Use this skill whenever TJ names an Indian company or ticker and wants
-  it analysed, researched, evaluated, or looked up — triggers include "dhancha",
-  "deep dive", "analyse <company>", "should I look at <stock>", "what do you
-  think of <company>", "full workup on <ticker>", "quick take on <stock>", or
-  any request to study an Indian equity's fundamentals, technicals, sector, or
+  it analysed, researched, evaluated, or looked up — triggers include
+  "dhancha", "deep dive", "analyse this company", "should I look at this
+  stock", "what do you think of it", "full workup", "quick take", or any
+  request to study an Indian equity's fundamentals, technicals, sector, or
   investment case. Do NOT use for portfolio-level questions about TJ's own
   holdings (that's Meridian's job) or for non-Indian stocks.
 ---
