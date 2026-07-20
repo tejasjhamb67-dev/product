@@ -1,0 +1,23 @@
+{
+  "skill_name": "dhancha",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "dhancha on Laurus Labs, thinking of making it a core position",
+      "expected_output": "Full three-lens HTML deep dive: pharma sector playbook KPIs (US generics erosion, USFDA plant status, ANDA pipeline, CDMO mix), 10-yr fundamentals with red-flag scan, live technicals with levels and relative strength, and a concentrated-portfolio verdict with conviction per lens, thesis-breakers, and monitoring triggers. All numbers current (fetched at run time) with clickable sources and IST timestamp.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "quick take on that smallcap wire company polycab's competitor... RR Kabel i think? is it worth a look",
+      "expected_output": "Resolves fuzzy description to RR KABEL (NSE: RRKABEL), notes it's actually mid/small cap per current AMFI cutoffs, and gives a tight prose quick-take in chat (no HTML): live price/valuation vs Polycab and KEI, latest quarter trend, one or two flags, and a direct opinion. No stale training-data numbers.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "analyse Suzlon for me, everything - sector, fundamentals, chart. can the turnaround sustain?",
+      "expected_output": "Full dhancha treating it as a turnaround bet: power/RE sector playbook (order book, execution, policy), fundamentals emphasising balance-sheet repair history, dilution track record and cash-flow quality, technicals with liquidity/delivery character, and an honest verdict including the counter-case and what breaks the thesis.",
+      "files": []
+    }
+  ]
+}
